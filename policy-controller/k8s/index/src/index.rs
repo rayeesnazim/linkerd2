@@ -609,6 +609,65 @@ impl kubert::index::IndexNamespacedResource<k8s::policy::NetworkAuthentication> 
     }
 }
 
+// impl kubert::index::IndexNamespacedResource<k8s::ServiceAccount> for Index {
+//     fn apply(&mut self, authn: k8s::ServiceAccount) {
+//         let ns = authn
+//             .namespace()
+//             .expect("ServiceAccount must have a namespace");
+//         let name = authn.name();
+//         let _span = info_span!("apply", %ns, %name).entered();
+//         if self.authentications.update_serviceaccount(ns, name, authn) {
+//             self.reindex_all()
+//         }
+//     }
+
+//     fn delete(&mut self, ns: String, name: String) {
+//         let _span = info_span!("delete", %ns, %name).entered();
+//         if let Entry::Occupied(mut ns) = self.authentications.by_ns.entry(ns) {
+//             tracing::debug!("Deleting ServiceAccount");
+//             ns.get_mut().serviceaccount.remove(&name);
+//             if ns.get().is_empty() {
+//                 ns.remove();
+//             }
+//             self.reindex_all();
+//         } else {
+//             tracing::warn!("Namespace already deleted");
+//         }
+//     }
+
+//     fn reset(
+//         &mut self,
+//         authns: Vec<k8s::ServiceAccount>,
+//         deleted: HashMap<String, HashSet<String>>,
+//     ) {
+//         let _span = info_span!("reset");
+//         let mut changed = false;
+//         for authn in authns.into_iter() {
+//             let namespace = authn
+//                 .namespace()
+//                 .expect("ServiceAccount must have a namespace");
+//             let name = authn.name();
+//             changed = self
+//                 .authentications
+//                 .update_serviceaccount(namespace, name, authn)
+//                 || changed;
+//         }
+//         for (namespace, names) in deleted.into_iter() {
+//             if let Entry::Occupied(mut ns) = self.authentications.by_ns.entry(namespace) {
+//                 for name in names.into_iter() {
+//                     ns.get_mut().serviceaccount.remove(&name);
+//                 }
+//                 if ns.get().is_empty() {
+//                     ns.remove();
+//                 }
+//             }
+//         }
+//         if changed {
+//             self.reindex_all();
+//         }
+//     }
+// }
+
 // === impl NemspaceIndex ===
 
 impl NamespaceIndex {
@@ -1120,6 +1179,22 @@ impl PolicyIndex {
                 );
             }
         }
+        for tgt in spec.authentications.iter() {
+            if let AuthenticationTarget::ServiceAccount {
+                ref namespace,
+                ref name,
+            } = tgt
+            {
+                // There can only be a single required ServiceAccount. This is
+                // enforced by the admission controller
+                if identities.is_some() {
+                    bail!("policy must not include multiple ServiceAccounts");
+                }
+                let namespace = namespace.as_deref().unwrap_or(&self.namespace);
+                let id = self.cluster_info.service_account_identity(namespace, name);
+                identities = Some(vec![IdentityMatch::Exact(id)])
+            }
+        }
 
         let mut networks = None;
         for tgt in spec.authentications.iter() {
@@ -1219,6 +1294,32 @@ impl AuthenticationNsIndex {
 
         true
     }
+
+    // fn update_serviceaccount(
+    //     &mut self,
+    //     namespace: String,
+    //     name: String,
+    //     sa: ServiceAccount,
+    // ) -> bool {
+    //     match self
+    //         .by_ns
+    //         .entry(namespace)
+    //         .or_default()
+    //         .serviceaccount
+    //         .entry(name)
+    //     {
+    //         Entry::Vacant(entry) => {
+    //             entry.insert(sa);
+    //         }
+    //         Entry::Occupied(mut entry) => {
+    //             if *entry.get() == sa {
+    //                 return false;
+    //             }
+    //             entry.insert(sa);
+    //         }
+    //     }
+    //     true
+    // }
 }
 
 // === impl AuthenticationIndex ===
